@@ -5,7 +5,7 @@ description: "在 AgentScope Java 中配置并连接 LLM 模型提供商"
 
 ## 概述
 
-模型层采用两层结构：上层是 **Credential**（`io.agentscope.core.credential`），承载某个提供商的 API 鉴权字段；下层是 **Chat Model**（`io.agentscope.core.model`），即在该凭证基础上对接的具体推理模型实现。
+模型层采用两层结构：上层是 **Credential**（`io.agentscope.core.credential`），承载某个提供商的 API 鉴权字段；下层是 **Chat Model**，即在该凭证基础上对接的具体推理模型实现。
 
 ```text
 CredentialBase/
@@ -21,6 +21,85 @@ CredentialBase/
 
 这种分层与前端的自然交互流程一致 —— 先注册凭证，再从凭证下挑选模型 —— 让界面只需鉴权一次，就能展示该提供商支持的所有模型。
 
+## Provider 模块迁移
+
+Provider-specific 的模型实现已经从 `agentscope-core` 迁移到独立 extension module 中。core 现在只保留共享模型契约与运行时工具；每个 provider module 自己维护 chat model、credential、formatter、DTO、异常、SDK/API client 代码。
+
+| Provider | Maven artifact | 主要包名 |
+|----------|----------------|----------|
+| OpenAI | `agentscope-extensions-model-openai` | `io.agentscope.extensions.model.openai` |
+| DashScope | `agentscope-extensions-model-dashscope` | `io.agentscope.extensions.model.dashscope` |
+| Gemini | `agentscope-extensions-model-gemini` | `io.agentscope.extensions.model.gemini` |
+| Anthropic | `agentscope-extensions-model-anthropic` | `io.agentscope.extensions.model.anthropic` |
+| Ollama | `agentscope-extensions-model-ollama` | `io.agentscope.extensions.model.ollama` |
+
+### 迁移步骤
+
+1. 增加对应 provider extension module 依赖。以 DashScope 为例：
+
+```xml
+<dependency>
+    <groupId>io.agentscope</groupId>
+    <artifactId>agentscope-extensions-model-dashscope</artifactId>
+</dependency>
+```
+
+其他 provider artifact 遵循同样模式：`agentscope-extensions-model-openai`、`agentscope-extensions-model-gemini`、`agentscope-extensions-model-anthropic`、`agentscope-extensions-model-ollama`。
+
+2. 将 provider 模型 import 从 `io.agentscope.core.model.*` 改为 `io.agentscope.extensions.model.<provider>.*`。
+3. 将 provider formatter import 从 `io.agentscope.core.formatter.<provider>.*` 改为 `io.agentscope.extensions.model.<provider>.formatter.*`。
+4. Spring Boot 应用中，改用对应 provider-specific starter 和 `agentscope.<provider>.*` 配置：
+
+```xml
+<dependency>
+    <groupId>io.agentscope</groupId>
+    <artifactId>agentscope-openai-spring-boot-starter</artifactId>
+</dependency>
+```
+
+### 非 Spring 应用
+
+直接使用 provider 类时，需要引入对应 extension 依赖，并更新 import。例如：
+
+```java
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+```
+
+然后通过 provider builder 创建模型，并把 `Model` 实例传给 agent：
+
+```java
+DashScopeChatModel model =
+        DashScopeChatModel.builder()
+                .apiKey(System.getenv("DASHSCOPE_API_KEY"))
+                .modelName("qwen-plus")
+                .stream(true)
+                .formatter(new DashScopeChatFormatter())
+                .build();
+
+ReActAgent agent =
+        ReActAgent.builder()
+                .name("assistant")
+                .model(model)
+                .build();
+```
+
+### Spring Boot 应用
+
+Spring Boot 场景下，优先使用 provider-specific starter，例如 `agentscope-openai-spring-boot-starter`、`agentscope-dashscope-spring-boot-starter`、`agentscope-gemini-spring-boot-starter`、`agentscope-anthropic-spring-boot-starter`。这些 starter 直接依赖对应 model extension，创建 Spring 管理的 `Model` bean，通用的 `agentscope-spring-boot-starter` 继续负责 AgentScope 的公共基础设施。
+
+OpenAI 示例：
+
+```yaml
+agentscope:
+  model:
+    provider: openai
+  openai:
+    api-key: ${OPENAI_API_KEY}
+    model-name: gpt-4.1-mini
+    stream: true
+```
+
 ## Chat Model
 
 **Chat Model** 是驱动 agent 对话与工具调用的 LLM，输入输出可以是文本之外的多模态内容。AgentScope Java 当前提供以下 Chat Model 类：
@@ -33,7 +112,7 @@ CredentialBase/
 | Gemini | `GeminiChatModel` | Google Gemini 模型，支持多模态 |
 | Ollama | `OllamaChatModel` | 本地 LLM 托管，凭证可选 |
 
-凭证类（`io.agentscope.core.credential`）：`OpenAICredential`、`AnthropicCredential`、`DashScopeCredential`、`GeminiCredential`、`OllamaCredential`、`DeepSeekCredential`、`KimiCredential`、`XAICredential`。
+凭证类：`OpenAICredential`、`AnthropicCredential`、`DashScopeCredential`、`GeminiCredential`、`OllamaCredential`、`DeepSeekCredential`、`KimiCredential`、`XAICredential`。
 
 ### 创建 Chat Model
 
@@ -42,8 +121,8 @@ CredentialBase/
 ::::{tab-set}
 :::{tab-item} Streaming
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 
 DashScopeChatModel model =
         DashScopeChatModel.builder()
@@ -56,8 +135,8 @@ DashScopeChatModel model =
 :::
 :::{tab-item} Tools
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
 
 DashScopeChatModel model =
@@ -75,8 +154,8 @@ DashScopeChatModel model =
 :::
 :::{tab-item} Reasoning
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
 
 DashScopeChatModel model =
@@ -113,9 +192,9 @@ DashScopeChatModel model =
 ```java
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.model.ChatResponse;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
 import java.util.List;
 
 DashScopeChatModel model =
@@ -130,18 +209,12 @@ model.stream(
                 List.of(new UserMessage("Count from 1 to 5.")),
                 /* tools = */ List.of(),
                 GenerateOptions.builder().build())
-        .doOnNext(chunk -> {
-            // chunk.isLast() == true 时表示最终累积内容
-            if (chunk.isLast()) {
-                System.out.println("Final: " + chunk.getContent());
-            } else {
-                System.out.println("Delta: " + chunk.getContent());
-            }
-        })
+        .doOnNext(chunk -> System.out.println("Chunk: " + chunk.getContent()))
+        .doOnComplete(() -> System.out.println("Stream completed"))
         .blockLast();
 ```
 
-`ChatResponse` 包含若干 content block（`TextBlock`、`ThinkingBlock`、`ToolUseBlock`、`DataBlock`）、一个 `isLast()` 标志，以及记录 token 数与耗时的 `ChatUsage`。
+`ChatResponse` 包含若干 content block（`TextBlock`、`ThinkingBlock`、`ToolUseBlock`、`DataBlock`）以及记录 token 数与耗时的 `ChatUsage`。
 
 实际开发中通常不需要直接调模型，而是通过 `ReActAgent` 调度；要直连模型做轻量调用时，推荐参考 `agentscope-examples/documentation/.../model/ModelRegistryExample.java`。
 
@@ -174,6 +247,55 @@ WeatherInfo info = msg.getStructuredData(WeatherInfo.class);
 
 实现细节：框架会基于目标 Class 合成强制结构化的工具调用，再校验并修复模型输出，最后把结果挂到 `Msg.metadata` 的 `structured_output` 字段，供 `getStructuredData(Class)` 直接反序列化。完整示例：`agentscope-examples/documentation/.../structuredoutput/StructuredOutputExample.java`。
 
+#### 结构化输出路径选择
+
+框架提供两条结构化输出路径：
+
+| 路径 | 条件 | 机制 |
+|------|------|------|
+| **Native** | `supportsNativeStructuredOutput() = true` | 通过 `response_format` + `json_schema` 让模型直接输出合规 JSON |
+| **Fallback**（默认） | `supportsNativeStructuredOutput() = false` | 注入 `generate_response` 合成工具，模型通过 tool call 返回结构化数据 |
+
+当 native 路径失败（如模型返回 400），框架会**自动降级**到 fallback 路径，无需用户干预。
+
+#### 各 Provider 默认行为
+
+| Provider | `supportsNativeStructuredOutput` | 说明 |
+|----------|----------------------------------|------|
+| OpenAI (GPT-4o 等) | `true` | 原生支持 `json_schema` |
+| OpenAI (DeepSeek/GLM formatter) | `false` | 不支持，自动走 fallback |
+| DashScope | `false` | DashScope 原生端点仅支持 `json_object`，不支持 `json_schema`；框架默认走 fallback |
+| Anthropic | `false`（默认） | — |
+
+> **DashScope 用户注意**：DashScope 的思考模式（`enableThinking(true)`）不支持结构化输出，框架会强制走 fallback 路径。
+
+#### 显式配置
+
+如果确认你的模型/端点支持 `json_schema`，可以通过 builder 开启 native 路径：
+
+```java
+DashScopeChatModel model = DashScopeChatModel.builder()
+        .apiKey(System.getenv("DASHSCOPE_API_KEY"))
+        .modelName("qwen-plus")
+        .nativeStructuredOutput(true)  // 显式开启 native json_schema 路径
+        .build();
+```
+
+#### 结构化输出与工具调用共存
+
+当 Agent 同时注册了工具并请求结构化输出时，部分 OpenAI 兼容 API（如 Kimi、Deepseek 等）会优先遵循 `response_format` 约束而跳过工具调用。设置 `nativeStructuredOutputWithTools(false)` 可解决此问题：
+
+```java
+OpenAIChatModel model = OpenAIChatModel.builder()
+        .apiKey("...")
+        .baseUrl("https://api.moonshot.cn/v1")
+        .modelName("moonshot-v1-8k")
+        .nativeStructuredOutputWithTools(false)
+        .build();
+```
+
+`DashScopeChatModel` 同样支持此配置。对于 OpenAI 原生模型（GPT-4o 等）无需设置。
+
 ### Formatter
 
 **Formatter** 负责把 AgentScope 的 `Msg` 对象转换为各提供商 API 期望的请求载荷。它通过 Chat Model builder 的 `formatter(...)` 字段配置。每个提供商内置两种 formatter：
@@ -186,8 +308,8 @@ WeatherInfo info = msg.getStructuredData(WeatherInfo.class);
 切换到多 agent 模式只需传入 MultiAgent 变体，无需修改 agent 代码：
 
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeMultiAgentFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeMultiAgentFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 
 DashScopeChatModel model =
         DashScopeChatModel.builder()
@@ -198,7 +320,7 @@ DashScopeChatModel model =
                 .build();
 ```
 
-各 provider 的 formatter 类（位于 `io.agentscope.core.formatter`）：
+各 provider 的 formatter 类现在随 provider extension module 一起提供：
 
 | Provider | Chat | MultiAgent |
 |---|---|---|

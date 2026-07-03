@@ -5,7 +5,7 @@ description: "Configure and connect LLM model providers in AgentScope Java"
 
 ## Overview
 
-The model layer is two-tiered: at the top sit **Credentials** (`io.agentscope.core.credential`), which carry a provider's API auth fields; below them sit **Chat Models** (`io.agentscope.core.model`), the concrete inference implementations attached to a credential.
+The model layer is two-tiered: at the top sit **Credentials** (`io.agentscope.core.credential`), which carry a provider's API auth fields; below them sit **Chat Models**, the concrete inference implementations attached to a credential.
 
 ```text
 CredentialBase/
@@ -21,6 +21,85 @@ A **Credential** carries a provider's API auth fields (`apiKey`, `baseUrl`, …)
 
 This layering matches the natural UX in a frontend — register the credential first, then pick a model under it — so the UI authenticates once and shows everything that provider supports.
 
+## Provider module migration
+
+Provider-specific model implementations have been moved out of `agentscope-core` into independent extension modules. The core module now keeps the shared model contracts and runtime utilities, while each provider module owns its chat model, credential, formatter, DTO, exception, and SDK/API client code.
+
+| Provider | Maven artifact | Main package |
+|----------|----------------|--------------|
+| OpenAI | `agentscope-extensions-model-openai` | `io.agentscope.extensions.model.openai` |
+| DashScope | `agentscope-extensions-model-dashscope` | `io.agentscope.extensions.model.dashscope` |
+| Gemini | `agentscope-extensions-model-gemini` | `io.agentscope.extensions.model.gemini` |
+| Anthropic | `agentscope-extensions-model-anthropic` | `io.agentscope.extensions.model.anthropic` |
+| Ollama | `agentscope-extensions-model-ollama` | `io.agentscope.extensions.model.ollama` |
+
+### Migration checklist
+
+1. Add the provider extension module dependency. For example, DashScope:
+
+```xml
+<dependency>
+    <groupId>io.agentscope</groupId>
+    <artifactId>agentscope-extensions-model-dashscope</artifactId>
+</dependency>
+```
+
+Other provider artifacts follow the same pattern: `agentscope-extensions-model-openai`, `agentscope-extensions-model-gemini`, `agentscope-extensions-model-anthropic`, and `agentscope-extensions-model-ollama`.
+
+2. Replace provider imports from `io.agentscope.core.model.*` with `io.agentscope.extensions.model.<provider>.*`.
+3. Replace provider formatter imports from `io.agentscope.core.formatter.<provider>.*` with `io.agentscope.extensions.model.<provider>.formatter.*`.
+4. For Spring Boot applications, replace the generic model creation path with the matching provider-specific starter and its `agentscope.<provider>.*` properties.
+
+```xml
+<dependency>
+    <groupId>io.agentscope</groupId>
+    <artifactId>agentscope-openai-spring-boot-starter</artifactId>
+</dependency>
+```
+
+### Non-Spring applications
+
+When using provider classes directly, add the corresponding extension dependency and update imports. For example:
+
+```java
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+```
+
+Then create the model with the provider builder and pass the `Model` instance to the agent:
+
+```java
+DashScopeChatModel model =
+        DashScopeChatModel.builder()
+                .apiKey(System.getenv("DASHSCOPE_API_KEY"))
+                .modelName("qwen-plus")
+                .stream(true)
+                .formatter(new DashScopeChatFormatter())
+                .build();
+
+ReActAgent agent =
+        ReActAgent.builder()
+                .name("assistant")
+                .model(model)
+                .build();
+```
+
+### Spring Boot applications
+
+For Spring Boot, prefer provider-specific starters such as `agentscope-openai-spring-boot-starter`, `agentscope-dashscope-spring-boot-starter`, `agentscope-gemini-spring-boot-starter`, and `agentscope-anthropic-spring-boot-starter`. These starters directly depend on the matching model extension, create Spring-managed `Model` beans, and leave the generic starter focused on common AgentScope infrastructure.
+
+OpenAI example:
+
+```yaml
+agentscope:
+  model:
+    provider: openai
+  openai:
+    api-key: ${OPENAI_API_KEY}
+    model-name: gpt-4.1-mini
+    stream: true
+```
+
 ## Chat model
 
 A **Chat Model** is the LLM driving conversation and tool calling, with input and output potentially spanning multiple modalities. AgentScope Java currently ships:
@@ -33,7 +112,7 @@ A **Chat Model** is the LLM driving conversation and tool calling, with input an
 | Gemini | `GeminiChatModel` | Google Gemini; multi-modal |
 | Ollama | `OllamaChatModel` | Locally hosted LLMs; credential optional |
 
-Credential classes (`io.agentscope.core.credential`): `OpenAICredential`, `AnthropicCredential`, `DashScopeCredential`, `GeminiCredential`, `OllamaCredential`, `DeepSeekCredential`, `KimiCredential`, `XAICredential`.
+Credential classes: `OpenAICredential`, `AnthropicCredential`, `DashScopeCredential`, `GeminiCredential`, `OllamaCredential`, `DeepSeekCredential`, `KimiCredential`, `XAICredential`.
 
 ### Creating a chat model
 
@@ -42,8 +121,8 @@ Each chat model is built with a builder. The most common fields are `apiKey`, `m
 ::::{tab-set}
 :::{tab-item} Streaming
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 
 DashScopeChatModel model =
         DashScopeChatModel.builder()
@@ -56,8 +135,8 @@ DashScopeChatModel model =
 :::
 :::{tab-item} Tools
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
 
 DashScopeChatModel model =
@@ -75,8 +154,8 @@ DashScopeChatModel model =
 :::
 :::{tab-item} Reasoning
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
 
 DashScopeChatModel model =
@@ -113,9 +192,9 @@ The `Model` interface exposes a unified `stream(messages, tools, options)` retur
 ```java
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.model.ChatResponse;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 import io.agentscope.core.model.GenerateOptions;
-import io.agentscope.core.formatter.dashscope.DashScopeChatFormatter;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeChatFormatter;
 import java.util.List;
 
 DashScopeChatModel model =
@@ -130,18 +209,12 @@ model.stream(
                 List.of(new UserMessage("Count from 1 to 5.")),
                 /* tools = */ List.of(),
                 GenerateOptions.builder().build())
-        .doOnNext(chunk -> {
-            // chunk.isLast() == true marks the final accumulated content
-            if (chunk.isLast()) {
-                System.out.println("Final: " + chunk.getContent());
-            } else {
-                System.out.println("Delta: " + chunk.getContent());
-            }
-        })
+        .doOnNext(chunk -> System.out.println("Chunk: " + chunk.getContent()))
+        .doOnComplete(() -> System.out.println("Stream completed"))
         .blockLast();
 ```
 
-A `ChatResponse` carries a list of content blocks (`TextBlock`, `ThinkingBlock`, `ToolUseBlock`, `DataBlock`), an `isLast()` flag, and a `ChatUsage` recording token counts and timing.
+A `ChatResponse` carries a list of content blocks (`TextBlock`, `ThinkingBlock`, `ToolUseBlock`, `DataBlock`) and a `ChatUsage` recording token counts and timing.
 
 In practice you usually call models indirectly via `ReActAgent`. For lightweight direct invocation, see `agentscope-examples/documentation/.../model/ModelRegistryExample.java`.
 
@@ -174,6 +247,55 @@ WeatherInfo info = msg.getStructuredData(WeatherInfo.class);
 
 How it works: the framework synthesizes a forced structured tool call from the target class, validates and repairs the model output, and writes the result into `Msg.metadata` under the `structured_output` key, so `getStructuredData(Class)` can deserialize it directly. Complete example: `agentscope-examples/documentation/.../structuredoutput/StructuredOutputExample.java`.
 
+#### Structured output path selection
+
+The framework provides two structured output paths:
+
+| Path | Condition | Mechanism |
+|------|-----------|-----------|
+| **Native** | `supportsNativeStructuredOutput() = true` | Uses `response_format` + `json_schema` for direct JSON output |
+| **Fallback** (default) | `supportsNativeStructuredOutput() = false` | Injects a `generate_response` synthetic tool; model returns structured data via tool call |
+
+If the native path fails (e.g. model returns HTTP 400), the framework **automatically falls back** to the synthetic tool path — no user intervention needed.
+
+#### Default behavior per provider
+
+| Provider | `supportsNativeStructuredOutput` | Notes |
+|----------|----------------------------------|-------|
+| OpenAI (GPT-4o, etc.) | `true` | Native `json_schema` support |
+| OpenAI (DeepSeek/GLM formatter) | `false` | Not supported; auto-fallback |
+| DashScope | `false` | Native endpoint only supports `json_object`, not `json_schema`; fallback by default |
+| Anthropic | `false` (default) | — |
+
+> **DashScope users**: Thinking mode (`enableThinking(true)`) does not support structured output at all — the framework forces the fallback path.
+
+#### Explicit configuration
+
+If you confirm your model/endpoint supports `json_schema`, enable the native path via builder:
+
+```java
+DashScopeChatModel model = DashScopeChatModel.builder()
+        .apiKey(System.getenv("DASHSCOPE_API_KEY"))
+        .modelName("qwen-plus")
+        .nativeStructuredOutput(true)  // explicitly enable native json_schema path
+        .build();
+```
+
+#### Structured output with tool calling
+
+When an agent has both tools and structured output, some OpenAI-compatible providers (e.g. Kimi, Deepseek) prioritise the `response_format` constraint and skip tool calling entirely. Set `nativeStructuredOutputWithTools(false)` to resolve this:
+
+```java
+OpenAIChatModel model = OpenAIChatModel.builder()
+        .apiKey("...")
+        .baseUrl("https://api.moonshot.cn/v1")
+        .modelName("moonshot-v1-8k")
+        .nativeStructuredOutputWithTools(false)
+        .build();
+```
+
+`DashScopeChatModel` supports this option as well. For native OpenAI models (GPT-4o, etc.) the default behavior handles both correctly — no configuration needed.
+
 ### Formatter
 
 A **Formatter** converts AgentScope `Msg` objects into the request payload each provider's API expects. It is configured via the chat model builder's `formatter(...)`. Each provider ships two formatters:
@@ -186,8 +308,8 @@ A **Formatter** converts AgentScope `Msg` objects into the request payload each 
 To switch to multi-agent mode, just pass the MultiAgent variant — no agent code changes:
 
 ```java
-import io.agentscope.core.formatter.dashscope.DashScopeMultiAgentFormatter;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.extensions.model.dashscope.formatter.DashScopeMultiAgentFormatter;
+import io.agentscope.extensions.model.dashscope.DashScopeChatModel;
 
 DashScopeChatModel model =
         DashScopeChatModel.builder()
@@ -198,7 +320,7 @@ DashScopeChatModel model =
                 .build();
 ```
 
-Per-provider formatters (under `io.agentscope.core.formatter`):
+Per-provider formatters now live with their provider extension modules:
 
 | Provider | Chat | MultiAgent |
 |----------|------|------------|
